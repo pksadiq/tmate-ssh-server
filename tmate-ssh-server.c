@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <signal.h>
 #include <event.h>
+#include <poll.h>
 #include <arpa/inet.h>
 #ifndef IPPROTO_TCP
 #include <netinet/in.h>
@@ -21,7 +22,7 @@ char *get_ssh_conn_string(const char *session_token)
 	char *ret;
 
 	int ssh_port_advertized = tmate_settings->ssh_port_advertized == -1 ?
-		tmate_settings->ssh_port :
+		tmate_settings->ssh_admin_port :
 		tmate_settings->ssh_port_advertized;
 
 	if (ssh_port_advertized != 22)
@@ -262,6 +263,18 @@ static void client_bootstrap(struct tmate_session *_session)
 
 	alarm(0);
 
+	if (client->role == TMATE_ROLE_PTY_CLIENT) {
+		struct sockaddr_in addr;
+		socklen_t addrlen = sizeof(addr);
+
+		if (getsockname(ssh_get_fd(session), (struct sockaddr *)&addr, &addrlen) == -1) {
+			tmate_fatal("Error getting sockname: %s", strerror(errno));
+		}
+
+		if (ntohs(addr.sin_port) != tmate_settings->ssh_admin_port)
+			tmate_fatal("Invalid admin access");
+	}
+
 	/* The latency callback is set later */
 	start_keepalive_timer(client, TMATE_SSH_KEEPALIVE_SEC * 1000);
 	register_on_ssh_read(client);
@@ -452,10 +465,11 @@ static void handle_sigchld(__unused int sig)
 }
 
 void tmate_ssh_server_main(struct tmate_session *session, const char *keys_dir,
-			   const char *bind_addr, int port)
+			   const char *bind_addr, int port, int admin_port)
 {
 	struct tmate_ssh_client *client = &session->ssh_client;
-	ssh_bind bind;
+	ssh_bind bind, admin_bind = {};
+	struct pollfd fds[2] = {};
 	pid_t pid;
 	int fd;
 
@@ -463,6 +477,17 @@ void tmate_ssh_server_main(struct tmate_session *session, const char *keys_dir,
 	signal(SIGCHLD, handle_sigchld);
 
 	bind = prepare_ssh(keys_dir, bind_addr, port);
+
+	/* Use the same fd for both, we shall change it later if needed */
+	fds[0].fd = ssh_bind_get_fd(bind);
+	fds[1].fd = ssh_bind_get_fd(bind);
+	fds[0].events = POLLIN;
+	fds[1].events = POLLIN;
+
+	if (admin_port != port) {
+		admin_bind = prepare_ssh(keys_dir, bind_addr, admin_port);
+		fds[1].fd = ssh_bind_get_fd(admin_bind);
+	}
 
 	client->session = ssh_new();
 	client->channel = NULL;
@@ -474,7 +499,24 @@ void tmate_ssh_server_main(struct tmate_session *session, const char *keys_dir,
 		tmate_fatal("Cannot initialize session");
 
 	for (;;) {
-		fd = accept(ssh_bind_get_fd(bind), NULL, NULL);
+		int ret;
+
+		do {
+			errno = 0;
+			ret = poll(fds, 2, -1);
+		} while (ret == -1 && errno == EINTR);
+
+		if (errno != 0)
+			tmate_fatal("Polling error: %d", errno);
+
+		if (fds[0].revents & POLLIN) {
+			fd = accept(fds[0].fd, NULL, NULL);
+		} else if (fds[1].revents & POLLIN) {
+			fd = accept(fds[1].fd, NULL, NULL);
+		} else {
+			continue;
+		}
+
 		if (fd < 0)
 			tmate_fatal("Error accepting connection");
 
@@ -505,6 +547,7 @@ void tmate_ssh_server_main(struct tmate_session *session, const char *keys_dir,
 			tmate_fatal("Error accepting connection: %s", ssh_get_error(bind));
 
 		ssh_bind_free(bind);
+		ssh_bind_free(admin_bind);
 
 		client_bootstrap(session);
 		/* never reached */

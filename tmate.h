@@ -173,7 +173,7 @@ struct tmate_ssh_client {
 };
 
 extern void tmate_ssh_server_main(struct tmate_session *session,
-				  const char *keys_dir, const char *bind_addr, int port);
+				  const char *keys_dir, const char *bind_addr, int port, int admin_port);
 
 /* tmate-main.c */
 
@@ -199,6 +199,7 @@ struct tmate_settings {
 	bool authorized_keys_only;
 	int ssh_port;
 	int ssh_port_advertized;
+	int ssh_admin_port;
 	const char *websocket_hostname;
 	int websocket_port;
 	const char *tmate_host;
