@@ -10,6 +10,7 @@ RUN apk add --no-cache \
 	gcc \
 	git \
 	libevent-dev \
+	elogind-dev \
 	linux-headers \
 	make \
 	msgpack-c-dev \
@@ -36,6 +37,7 @@ RUN apk add --no-cache \
 	bash \
 	gdb \
 	libevent \
+	libelogind \
 	libssh \
 	msgpack-c \
 	ncurses-libs \

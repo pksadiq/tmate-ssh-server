@@ -1,6 +1,7 @@
 #include <libssh/libssh.h>
 #include <libssh/server.h>
 #include <libssh/callbacks.h>
+#include <systemd/sd-daemon.h>
 #include <sys/socket.h>
 #include <netinet/tcp.h>
 #include <sys/wait.h>
@@ -407,7 +408,7 @@ static void ssh_import_key(ssh_bind bind, const char *keys_dir, const char *name
 	ssh_bind_options_set(bind, SSH_BIND_OPTIONS_IMPORT_KEY, key);
 }
 
-static ssh_bind prepare_ssh(const char *keys_dir, const char *bind_addr, int port)
+static ssh_bind prepare_ssh(const char *keys_dir, const char *bind_addr, int port, int socket_fd)
 {
 	ssh_bind bind;
 	int ssh_log_level;
@@ -431,6 +432,9 @@ static ssh_bind prepare_ssh(const char *keys_dir, const char *bind_addr, int por
 	ssh_bind_options_set(bind, SSH_BIND_OPTIONS_BINDPORT, &port);
 	ssh_bind_options_set(bind, SSH_BIND_OPTIONS_BANNER, TMATE_SSH_BANNER);
 	ssh_bind_options_set(bind, SSH_BIND_OPTIONS_LOG_VERBOSITY, &ssh_log_level);
+
+	if (socket_fd)
+		ssh_bind_set_fd(bind, socket_fd);
 
 	ssh_import_key(bind, keys_dir, "ssh_host_rsa_key");
 	ssh_import_key(bind, keys_dir, "ssh_host_ed25519_key");
@@ -470,13 +474,30 @@ void tmate_ssh_server_main(struct tmate_session *session, const char *keys_dir,
 	struct tmate_ssh_client *client = &session->ssh_client;
 	ssh_bind bind, admin_bind = {};
 	struct pollfd fds[2] = {};
+	int socket_fds[2]={};
 	pid_t pid;
-	int fd;
+	int fd, fd_count;
 
 	tmate_catch_sigsegv();
 	signal(SIGCHLD, handle_sigchld);
 
-	bind = prepare_ssh(keys_dir, bind_addr, port);
+	fd_count = sd_listen_fds(0);
+
+	if (fd_count) {
+		if (admin_port != port && fd_count != 2)
+			tmate_fatal("Admin and Client port differs. "
+				"But %d port(s) provided", fd_count);
+		else if (admin_port == port && fd_count != 1)
+			tmate_fatal("Admin and Client port are same. "
+				"But %d port(s) provided", fd_count);
+
+		/* We don't care about the order of ports provided */
+		/* as we handle them when we receive the requests */
+		socket_fds[0] = SD_LISTEN_FDS_START + 0;
+		socket_fds[1] = SD_LISTEN_FDS_START + 1;
+	}
+
+	bind = prepare_ssh(keys_dir, bind_addr, port, socket_fds[0]);
 
 	/* Use the same fd for both, we shall change it later if needed */
 	fds[0].fd = ssh_bind_get_fd(bind);
@@ -485,7 +506,7 @@ void tmate_ssh_server_main(struct tmate_session *session, const char *keys_dir,
 	fds[1].events = POLLIN;
 
 	if (admin_port != port) {
-		admin_bind = prepare_ssh(keys_dir, bind_addr, admin_port);
+		admin_bind = prepare_ssh(keys_dir, bind_addr, admin_port, socket_fds[1]);
 		fds[1].fd = ssh_bind_get_fd(admin_bind);
 	}
 

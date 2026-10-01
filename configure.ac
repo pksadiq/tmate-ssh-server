@@ -232,6 +232,20 @@ if test "x$found_libssh" = xno; then
   AC_MSG_ERROR("libssh >= 0.7.0 not found")
 fi
 
+PKG_CHECK_MODULES(
+  LIBSYSTEMD,
+  libsystemd >= 251,
+  [
+    CPPFLAGS="$LIBSYSTEMD_CFLAGS $CPPFLAGS"
+    LIBS="$LIBSYSTEMD_LIBS $LIBS"
+    found_libsystemd=yes
+  ],
+  found_libsystemd=no
+)
+if test "x$found_libsystemd" = xno; then
+  AC_MSG_ERROR("libsystemd >= 251 not found")
+fi
+
 AC_CHECK_FUNCS([setresuid setresgid setreuid setregid])
 
 # Check for b64_ntop.

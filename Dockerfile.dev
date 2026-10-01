@@ -11,6 +11,7 @@ RUN set -ex; \
 		gcc \
 		git \
 		libevent-dev \
+		elogind-dev \
 		linux-headers \
 		make \
 		msgpack-c-dev \
